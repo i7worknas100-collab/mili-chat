@@ -7,31 +7,36 @@ from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import os
 
+# ========== تنظیمات اصلی ==========
 TOKEN = "400404882:JYKnasyJGd6y_4rEFeRyHGGZAvE72FlHWIg"
-
-# ========== تنظیمات ==========
 ADMIN_USERNAME = "whysay"
+
 MAX_WAITING = 30
 waiting_list = deque(maxlen=MAX_WAITING)
 pairs = {}
 BROADCAST_MODE = {}
 
-# ========== وب سرور برای نگه داشتن Render ==========
+# ========== راه‌اندازی وب سرور (برای Render) ==========
 PORT = int(os.environ.get("PORT", 8080))
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        self.send_header('Content-type', 'text/html')
         self.end_headers()
         self.wfile.write(b"MILI CHAT Bot is Running!")
     
     def log_message(self, format, *args):
-        pass  # خاموش کردن لاگ‌های اضافی
+        # خاموش کردن لاگ‌های اضافی
+        pass
 
-def keep_alive():
+def run_web_server():
     server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
     server.serve_forever()
-# =================================================
+
+# اجرای وب سرور در یک ترد جداگانه (برای اینکه رندر خاموشش نکنه)
+threading.Thread(target=run_web_server, daemon=True).start()
+# ==================================================
 
 # ========== دیتابیس ==========
 def db_execute(query, params=(), fetch_one=False, fetch_all=False):
@@ -94,32 +99,12 @@ def get_updates(offset=None):
         with urllib.request.urlopen(url, timeout=30) as res:
             data = json.loads(res.read().decode())
             return data if data.get("ok") else {"result": []}
-    except:
+    except Exception as e:
+        print(f"GetUpdates Error: {e}")
         return {"result": []}
 
 def is_admin(username):
     return username == ADMIN_USERNAME
-
-# ========== توابع پیام همگانی ==========
-def broadcast_message(admin_id, text):
-    users = db_execute("SELECT user_id FROM users", fetch_all=True)
-    if not users:
-        send_msg(admin_id, "❌ هیچ کاربری وجود ندارد!")
-        return 0
-    
-    send_msg(admin_id, f"📢 در حال ارسال به {len(users)} کاربر...")
-    
-    success = 0
-    for user in users:
-        try:
-            send_msg(user[0], f"📢 **پیام همگانی:**\n\n{text}")
-            success += 1
-            time.sleep(0.2)
-        except:
-            pass
-    
-    send_msg(admin_id, f"✅ ارسال شد!\nموفق: {success}")
-    return success
 
 # ========== کیبوردها ==========
 KB_START = {"inline_keyboard": [[{"text": "🔎 شروع چت", "callback_data": "next"}]]}
@@ -147,33 +132,42 @@ TXT = {
     "cleaned": "✅ پاکسازی انجام شد.",
     "broadcast_prompt": "📢 متن پیام رو بفرست:",
     "broadcast_cancel": "❌ لغو شد.",
+    "broadcast_done": "✅ پیام همگانی به {} کاربر ارسال شد.",
+    "not_admin": "⛔ دسترسی غیرمجاز!",
 }
+
+# ========== پیام همگانی ==========
+def broadcast_message(admin_id, text):
+    users = db_execute("SELECT user_id FROM users", fetch_all=True)
+    if not users:
+        send_msg(admin_id, "❌ هیچ کاربری وجود ندارد!")
+        return 0
+    
+    send_msg(admin_id, f"📢 در حال ارسال به {len(users)} کاربر...")
+    
+    success = 0
+    fail = 0
+    for user in users:
+        try:
+            send_msg(user[0], f"📢 **پیام همگانی:**\n\n{text}")
+            success += 1
+            time.sleep(0.2)
+        except:
+            fail += 1
+    
+    send_msg(admin_id, TXT["broadcast_done"].format(success))
+    return success
 
 # ========== پاکسازی خودکار ==========
 def auto_cleaner():
     while True:
-        time.sleep(6 * 3600)
-        old = int(time.time()) - (3 * 86400)
+        time.sleep(6 * 3600)  # هر 6 ساعت
+        old = int(time.time()) - (3 * 86400)  # 3 روز
         conn = sqlite3.connect('bot_data.db')
-        conn.execute("DELETE FROM users WHERE last_seen < ?", (old,))
+        deleted = conn.execute("DELETE FROM users WHERE last_seen < ?", (old,)).rowcount
         conn.execute("VACUUM")
         conn.close()
-        
-        to_remove = []
-        for uid in list(pairs.keys()):
-            conn = sqlite3.connect('bot_data.db')
-            c = conn.cursor()
-            c.execute("SELECT 1 FROM users WHERE user_id = ?", (uid,))
-            if not c.fetchone():
-                to_remove.append(uid)
-            conn.close()
-        
-        for uid in to_remove:
-            partner = pairs.pop(uid, None)
-            if partner:
-                pairs.pop(partner, None)
-        
-        print(f"🧹 پاکسازی انجام شد")
+        print(f"🧹 پاکسازی: {deleted} کاربر حذف شد")
 
 # ========== توابع اصلی ==========
 def match():
@@ -184,7 +178,7 @@ def match():
         pairs[b] = a
         send_msg(a, TXT["connect"], KB_CHAT)
         send_msg(b, TXT["connect"], KB_CHAT)
-        print(f"✅ جفت شد")
+        print(f"✅ جفت شد: {a} <-> {b}")
 
 def get_stats():
     total = db_execute("SELECT COUNT(*) FROM users", fetch_one=True)[0]
@@ -198,9 +192,11 @@ def clean_old():
     conn.close()
 
 def handle(chat_id, text, msg_id, cb_id=None, username=""):
+    # ذخیره کاربر
     db_execute("INSERT OR REPLACE INTO users (user_id, last_seen, username) VALUES (?, ?, ?)", 
                (chat_id, int(time.time()), username))
     
+    # حالت پیام همگانی
     if chat_id in BROADCAST_MODE:
         if text == "/cancel":
             del BROADCAST_MODE[chat_id]
@@ -210,14 +206,20 @@ def handle(chat_id, text, msg_id, cb_id=None, username=""):
             broadcast_message(chat_id, text)
         return
     
+    # دستور start
     if text == "/start":
         send_msg(chat_id, TXT["welcome"], KB_START)
         return
     
-    if text == "/admin" and is_admin(username):
-        send_msg(chat_id, TXT["admin_panel"], KB_ADMIN)
+    # پنل ادمین
+    if text == "/admin":
+        if is_admin(username):
+            send_msg(chat_id, TXT["admin_panel"], KB_ADMIN)
+        else:
+            send_msg(chat_id, TXT["not_admin"])
         return
     
+    # پردازش دکمه‌ها
     if cb_id:
         answer_cb(cb_id)
         
@@ -245,6 +247,7 @@ def handle(chat_id, text, msg_id, cb_id=None, username=""):
             return
         
         if text == "next":
+            # قطع ارتباط قبلی
             p = pairs.pop(chat_id, None)
             if p:
                 pairs.pop(p, None)
@@ -255,8 +258,9 @@ def handle(chat_id, text, msg_id, cb_id=None, username=""):
             if chat_id not in waiting_list and chat_id not in pairs:
                 waiting_list.append(chat_id)
             match()
+            return
         
-        elif text == "stop":
+        if text == "stop":
             p = pairs.pop(chat_id, None)
             if p:
                 pairs.pop(p, None)
@@ -264,8 +268,9 @@ def handle(chat_id, text, msg_id, cb_id=None, username=""):
             if chat_id in waiting_list:
                 waiting_list.remove(chat_id)
             send_msg(chat_id, TXT["end"], KB_START)
+            return
         
-        elif text == "report":
+        if text == "report":
             p = pairs.get(chat_id)
             if p:
                 send_msg(chat_id, TXT["report"], KB_START)
@@ -273,8 +278,10 @@ def handle(chat_id, text, msg_id, cb_id=None, username=""):
                 pairs.pop(p, None)
             else:
                 send_msg(chat_id, "⚠️ هیچ پارتنری نیست", KB_START)
+            return
     
-    elif chat_id in pairs:
+    # پیام معمولی در چت
+    if chat_id in pairs:
         send_msg(pairs[chat_id], f"📝 {text}")
     else:
         if chat_id not in waiting_list:
@@ -283,48 +290,56 @@ def handle(chat_id, text, msg_id, cb_id=None, username=""):
 # ========== حلقه اصلی ==========
 def main():
     print("=" * 50)
-    print("🤖 MILI CHAT روشن شد")
-    print(f"👑 ادمین: @{ADMIN_USERNAME}")
+    print("🤖 MILI CHAT Bot Started Successfully!")
+    print(f"👑 Admin: @{ADMIN_USERNAME}")
+    print(f"🔌 Web server running on port {PORT}")
     print("=" * 50)
     
     last_id = 0
     
+    # ترد جفت‌سازی
     def matching_loop():
         while True:
             time.sleep(2)
             match()
     
-    threading.Thread(target=matching_loop, daemon=True).start()
-    threading.Thread(target=auto_cleaner, daemon=True).start()
+    # ترد پاکسازی خودکار
+    def cleaner_loop():
+        while True:
+            time.sleep(6 * 3600)
+            auto_cleaner()
     
+    threading.Thread(target=matching_loop, daemon=True).start()
+    threading.Thread(target=cleaner_loop, daemon=True).start()
+    
+    # حلقه دریافت آپدیت
     while True:
         try:
             updates = get_updates(last_id + 1)
-            for upd in updates.get("result", []):
-                last_id = upd["update_id"]
-                
-                if "message" in upd:
-                    m = upd["message"]
-                    chat_id = str(m["chat"]["id"])
-                    text = m.get("text", "")
-                    msg_id = m["message_id"]
-                    username = m.get("from", {}).get("username", "")
-                    handle(chat_id, text, msg_id, username=username)
-                
-                elif "callback_query" in upd:
-                    c = upd["callback_query"]
-                    chat_id = str(c["from"]["id"])
-                    data = c.get("data", "")
-                    msg_id = c["message"]["message_id"]
-                    cb_id = c["id"]
-                    username = c.get("from", {}).get("username", "")
-                    handle(chat_id, data, msg_id, cb_id, username)
+            if updates and updates.get("result"):
+                for update in updates["result"]:
+                    last_id = update["update_id"]
+                    
+                    if "message" in update:
+                        m = update["message"]
+                        chat_id = str(m["chat"]["id"])
+                        text = m.get("text", "")
+                        msg_id = m["message_id"]
+                        username = m.get("from", {}).get("username", "")
+                        handle(chat_id, text, msg_id, username=username)
+                    
+                    elif "callback_query" in update:
+                        c = update["callback_query"]
+                        chat_id = str(c["from"]["id"])
+                        data = c.get("data", "")
+                        msg_id = c["message"]["message_id"]
+                        cb_id = c["id"]
+                        username = c.get("from", {}).get("username", "")
+                        handle(chat_id, data, msg_id, cb_id, username)
         
         except Exception as e:
-            print(f"خطا: {e}")
+            print(f"Main loop error: {e}")
         time.sleep(1)
 
 if __name__ == "__main__":
-    # اجرای وب سرور در ترد جداگانه
-    threading.Thread(target=keep_alive, daemon=True).start()
     main()
