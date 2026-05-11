@@ -1,18 +1,40 @@
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 import time
 import threading
 import sqlite3
 import urllib.request
+import os
 from collections import deque
 
-TOKEN = "400404882:LKkN_Qf2-aDLxhqZtA_r6IjFlWJccMbSw88"
+# ========== وب سرور برای Render (اجباری) ==========
+PORT = int(os.environ.get("PORT", 8080))
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"MILI CHAT Bot is Running!")
+    
+    def log_message(self, format, *args):
+        pass
+
+def run_webserver():
+    server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
+    server.serve_forever()
+
+threading.Thread(target=run_webserver, daemon=True).start()
+print(f"🌐 Web server running on port {PORT}")
+# ============================================
 
 # ========== تنظیمات ==========
+TOKEN = "400404882:LKkN_Qf2-aDLxhqZtA_r6IjFlWJccMbSw88"
 ADMIN_USERNAME = "whysay"
 MAX_WAITING = 30
 waiting_list = deque(maxlen=MAX_WAITING)
 pairs = {}
-BROADCAST_MODE = {}  # ذخیره کاربرانی که در حالت ارسال پیام همگانی هستن
+BROADCAST_MODE = {}
 
 # ========== دیتابیس ==========
 def db_execute(query, params=(), fetch_one=False, fetch_all=False):
@@ -81,30 +103,25 @@ def get_updates(offset=None):
 def is_admin(username):
     return username == ADMIN_USERNAME
 
-# ========== توابع پیام همگانی ==========
+# ========== پیام همگانی ==========
 def broadcast_message(admin_id, text):
-    """ارسال پیام به همه کاربران"""
     users = db_execute("SELECT user_id FROM users", fetch_all=True)
     if not users:
-        send_msg(admin_id, "❌ هیچ کاربری برای ارسال وجود ندارد!")
+        send_msg(admin_id, "❌ هیچ کاربری وجود ندارد!")
         return 0
     
-    send_msg(admin_id, f"📢 در حال ارسال پیام به {len(users)} کاربر...\n⏳ لطفاً صبر کنید...")
+    send_msg(admin_id, f"📢 در حال ارسال به {len(users)} کاربر...")
     
     success = 0
-    fail = 0
-    
     for user in users:
         try:
             send_msg(user[0], f"📢 **پیام همگانی:**\n\n{text}")
             success += 1
-            time.sleep(0.2)  # جلوگیری از محدودیت
-        except Exception as e:
-            fail += 1
-            print(f"خطا در ارسال به {user[0]}: {e}")
+            time.sleep(0.2)
+        except:
+            pass
     
-    result_msg = f"✅ ارسال پیام همگانی کامل شد!\n\n✅ موفق: {success}\n❌ ناموفق: {fail}"
-    send_msg(admin_id, result_msg)
+    send_msg(admin_id, f"✅ ارسال شد!\nموفق: {success}")
     return success
 
 # ========== کیبوردها ==========
@@ -117,23 +134,22 @@ KB_ADMIN = {"inline_keyboard": [
     [{"text": "🗑️ پاکسازی", "callback_data": "admin_clean"}],
     [{"text": "🔙 بستن", "callback_data": "admin_close"}]
 ]}
-KB_BACK = {"inline_keyboard": [[{"text": "🔙 برگشت به پنل", "callback_data": "admin_back"}]]}
+KB_BACK = {"inline_keyboard": [[{"text": "🔙 برگشت", "callback_data": "admin_back"}]]}
 
 # ========== متن‌ها ==========
 TXT = {
-    "welcome": "🔰 MILI CHAT\n\n🔎 پیدا کردن پارتنر تصادفی\n\nبرای شروع روی دکمه کلیک کنید 👇",
+    "welcome": "🔰 MILI CHAT\n\n🔎 پیدا کردن پارتنر تصادفی\n\nبرای شروع کلیک کنید 👇",
     "search": "🔎 در حال جستجو...",
     "connect": "⚡️ متصل شد!\n🛡️ پارتنر پیدا شد\n\n━━━━━━━━━━━━━━━━━━━━\n💡 توجه:\n• از اطلاعات شخصی خود محافظت کنید\n• به افراد ناشناس زود اعتماد نکنید\n• مکالمه سیاسی ممنوع\n━━━━━━━━━━━━━━━━━━━━",
     "end": "🛑 چت پایان یافت.\n\nبرای شروع مجدد کلیک کنید.",
     "left": "❌ پارتنر شما چت را ترک کرد.\nبرای پیدا کردن پارتنر جدید کلیک کنید.",
     "report": "✅ گزارش شما ثبت شد.",
     "nochat": "🔍 شما در چت نیستید.\nروی Start کلیک کنید.",
-    "admin_panel": "🔰 پنل مدیریت MILI CHAT\n\nخوش آمدی ادمین!",
-    "stats": "📊 آمار ربات:\n\n👥 کل کاربران: {}\n🔄 جفت فعال: {}\n⏳ در صف: {}",
-    "cleaned": "✅ پاکسازی انجام شد.\n🗑️ کاربران غیرفعال حذف شدند.",
-    "broadcast_prompt": "📢 لطفاً متن پیام همگانی رو ارسال کن:\n\n(برای لغو /cancel رو بفرست)",
-    "broadcast_cancel": "❌ ارسال پیام همگانی لغو شد.",
-    "broadcast_start": "📢 در حال ارسال پیام همگانی...\n⏳ لطفاً صبر کنید...",
+    "admin_panel": "🔰 پنل مدیریت\n\nخوش آمدی ادمین!",
+    "stats": "📊 آمار:\n\n👥 کاربران: {}\n🔄 جفت فعال: {}\n⏳ در صف: {}",
+    "cleaned": "✅ پاکسازی انجام شد.",
+    "broadcast_prompt": "📢 متن پیام رو بفرست:",
+    "broadcast_cancel": "❌ لغو شد.",
 }
 
 # ========== پاکسازی خودکار ==========
@@ -160,7 +176,7 @@ def auto_cleaner():
             if partner:
                 pairs.pop(partner, None)
         
-        print(f"🧹 پاکسازی: {deleted} کاربر حذف، {len(to_remove)} جفت پاک شد")
+        print(f"🧹 پاکسازی: {deleted} کاربر حذف شد")
 
 # ========== توابع اصلی ==========
 def match():
@@ -185,11 +201,9 @@ def clean_old():
     conn.close()
 
 def handle(chat_id, text, msg_id, cb_id=None, username=""):
-    # ذخیره کاربر
     db_execute("INSERT OR REPLACE INTO users (user_id, last_seen, username) VALUES (?, ?, ?)", 
                (chat_id, int(time.time()), username))
     
-    # حالت ارسال پیام همگانی
     if chat_id in BROADCAST_MODE:
         if text == "/cancel":
             del BROADCAST_MODE[chat_id]
@@ -260,12 +274,11 @@ def handle(chat_id, text, msg_id, cb_id=None, username=""):
                 send_msg(chat_id, TXT["report"], KB_START)
                 pairs.pop(chat_id, None)
                 pairs.pop(p, None)
-                send_msg(p, TXT["end"], KB_START)
             else:
                 send_msg(chat_id, "⚠️ هیچ پارتنری نیست", KB_START)
     
     elif chat_id in pairs:
-        send_msg(pairs[chat_id], f" {text}")
+        send_msg(pairs[chat_id], f"📝 {text}")
     else:
         if chat_id not in waiting_list:
             send_msg(chat_id, TXT["nochat"], KB_START)
@@ -273,13 +286,8 @@ def handle(chat_id, text, msg_id, cb_id=None, username=""):
 # ========== حلقه اصلی ==========
 def main():
     print("=" * 50)
-    print("🤖 ربات MILI CHAT با پنل ادمین روشن شد")
-    print(f"👑 ادمین: @{ADMIN_USERNAME}")
-    print("🔗 ble.ir/milichat_bot")
-    print("=" * 50)
-    print("\n📢 دستورات:")
-    print("   /admin - پنل ادمین")
-    print("   /broadcast متن - ارسال پیام همگانی (دستوری)")
+    print("🤖 MILI CHAT Bot Started Successfully!")
+    print(f"👑 Admin: @{ADMIN_USERNAME}")
     print("=" * 50)
     
     last_id = 0
@@ -295,28 +303,29 @@ def main():
     while True:
         try:
             updates = get_updates(last_id + 1)
-            for upd in updates.get("result", []):
-                last_id = upd["update_id"]
-                
-                if "message" in upd:
-                    m = upd["message"]
-                    chat_id = str(m["chat"]["id"])
-                    text = m.get("text", "")
-                    msg_id = m["message_id"]
-                    username = m.get("from", {}).get("username", "")
-                    handle(chat_id, text, msg_id, username=username)
-                
-                elif "callback_query" in upd:
-                    c = upd["callback_query"]
-                    chat_id = str(c["from"]["id"])
-                    data = c.get("data", "")
-                    msg_id = c["message"]["message_id"]
-                    cb_id = c["id"]
-                    username = c.get("from", {}).get("username", "")
-                    handle(chat_id, data, msg_id, cb_id, username)
+            if updates and updates.get("result"):
+                for update in updates["result"]:
+                    last_id = update["update_id"]
+                    
+                    if "message" in update:
+                        m = update["message"]
+                        chat_id = str(m["chat"]["id"])
+                        text = m.get("text", "")
+                        msg_id = m["message_id"]
+                        username = m.get("from", {}).get("username", "")
+                        handle(chat_id, text, msg_id, username=username)
+                    
+                    elif "callback_query" in update:
+                        c = update["callback_query"]
+                        chat_id = str(c["from"]["id"])
+                        data = c.get("data", "")
+                        msg_id = c["message"]["message_id"]
+                        cb_id = c["id"]
+                        username = c.get("from", {}).get("username", "")
+                        handle(chat_id, data, msg_id, cb_id, username)
         
         except Exception as e:
-            print(f"خطا: {e}")
+            print(f"Error: {e}")
         time.sleep(1)
 
 if __name__ == "__main__":
